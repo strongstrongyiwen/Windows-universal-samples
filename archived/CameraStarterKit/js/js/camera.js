@@ -46,7 +46,7 @@
     // Information about the camera device
     var externalCamera = false,
         mirroringPreview = false;
-    
+
     // Rotation metadata to apply to the preview stream and recorded videos (MF_MT_VIDEO_ROTATION)
     // Reference: http://msdn.microsoft.com/en-us/library/windows/apps/xaml/hh868174.aspx
     var RotationKey = "C380465D-2271-428C-9B83-ECEA3B4A85C1";
@@ -67,7 +67,7 @@
             args.setPromise(WinJS.Promise.join(setUpBasedOnStateAsync(), WinJS.UI.processAll()));
         }
     };
-    
+
     // About to be suspended
     app.oncheckpoint = function (args) {
         _isSuspending = true;
@@ -79,7 +79,7 @@
         _isSuspending = false;
         setUpBasedOnStateAsync();
     }, false);
-    
+
     // Closing
     app.onunload = function (args) {
         document.getElementById("photoButton").removeEventListener("click", photoButton_tapped);
@@ -102,47 +102,49 @@
 
         // Get available devices for capturing pictures
         return findCameraDeviceByPanelAsync(Windows.Devices.Enumeration.Panel.back)
-        .then(function (camera) {
-            if (camera === null) {
-                console.log("No camera device found!");
-                return;
-            }
-            // Figure out where the camera is located
-            if (!camera.enclosureLocation || camera.enclosureLocation.panel === Windows.Devices.Enumeration.Panel.unknown) {
-                // No information on the location of the camera, assume it's an external camera, not integrated on the device
-                externalCamera = true;
-            }
-            else {
-                // Camera is fixed on the device
-                externalCamera = false;
+            .then(function (camera) {
+                if (camera === null) {
+                    console.log("No camera device found!");
+                    return;
+                }
+                // Figure out where the camera is located
+                if (!camera.enclosureLocation || camera.enclosureLocation.panel === Windows.Devices.Enumeration.Panel.unknown) {
+                    // No information on the location of the camera, assume it's an external camera, not integrated on the device
+                    externalCamera = true;
+                }
+                else {
+                    // Camera is fixed on the device
+                    externalCamera = false;
 
-                // Only mirror the preview if the camera is on the front panel
-                mirroringPreview = (camera.enclosureLocation.panel === Windows.Devices.Enumeration.Panel.front);
-            }
+                    // Only mirror the preview if the camera is on the front panel
+                    mirroringPreview = (camera.enclosureLocation.panel === Windows.Devices.Enumeration.Panel.front);
+                }
 
-            // Initialize rotationHelper
-            oRotationHelper = new CameraRotationHelper(camera.enclosureLocation);
-            oRotationHelper.addEventListener("orientationchanged", rotationHelper_orientationChanged);
+                // Initialize rotationHelper
+                oRotationHelper = new CameraRotationHelper(camera.enclosureLocation);
+                oRotationHelper.addEventListener("orientationchanged", rotationHelper_orientationChanged);
 
-            oMediaCapture = new Capture.MediaCapture();
+                oMediaCapture = new Capture.MediaCapture();
 
-            // Register for a notification when video recording has reached the maximum time and when something goes wrong
-            oMediaCapture.addEventListener("recordlimitationexceeded", mediaCapture_recordLimitationExceeded);
-            oMediaCapture.addEventListener("failed", mediaCapture_failed);
+                // Register for a notification when video recording has reached the maximum time and when something goes wrong
+                oMediaCapture.addEventListener("recordlimitationexceeded", mediaCapture_recordLimitationExceeded);
+                oMediaCapture.addEventListener("failed", mediaCapture_failed);
 
-            var settings = new Capture.MediaCaptureInitializationSettings();
-            settings.videoDeviceId = camera.id;
-            settings.streamingCaptureMode = Capture.StreamingCaptureMode.audioAndVideo;
+                var settings = new Capture.MediaCaptureInitializationSettings();
+                settings.videoDeviceId = camera.id;
+                settings.streamingCaptureMode = Capture.StreamingCaptureMode.audioAndVideo;
 
-            // Initialize media capture and start the preview
-            return oMediaCapture.initializeAsync(settings)
-            .then(function () {
-                isInitialized = true;
-                startPreview();
-            });
-        }, function (error) {
-            console.log(error.message);
-        }).done();
+                // Initialize media capture and start the preview
+                return oMediaCapture.initializeAsync(settings)
+                    .then(function () {
+                        isInitialized = true;
+                        // Get all available media stream properties and select the first one as default
+                        var allProperties = oMediaCapture.videoDeviceController.getAvailableMediaStreamProperties(Capture.MediaStreamType.videoPreview);
+                        startPreview(oMediaCapture, Capture.MediaStreamType.videoPreview, allProperties[0]);    
+                    });
+            }, function (error) {
+                console.log(error.message);
+            }).done();
     }
 
     /// <summary>
@@ -196,20 +198,21 @@
 
         // When all our tasks complete, clean up MediaCapture
         return WinJS.Promise.join(promiseList)
-        .then(function () {
-            if (oMediaCapture != null) {
-                oMediaCapture.removeEventListener("recordlimitationexceeded", mediaCapture_recordLimitationExceeded);
-                oMediaCapture.removeEventListener("failed", mediaCapture_failed);
-                oMediaCapture.close();
-                oMediaCapture = null;
-            }
-        });
+            .then(function () {
+                if (oMediaCapture != null) {
+                    oMediaCapture.removeEventListener("recordlimitationexceeded", mediaCapture_recordLimitationExceeded);
+                    oMediaCapture.removeEventListener("failed", mediaCapture_failed);
+                    oMediaCapture.close();
+                    oMediaCapture = null;
+                }
+            });
     }
 
     /// <summary>
+    /// Sets encoding properties on a camera stream. Ensures VideoElement and preview stream are stopped before setting properties.
     /// Starts the preview and adjusts it for for rotation and mirroring after making a request to keep the screen on
     /// </summary>
-    function startPreview() {
+    function startPreview(mediaCapture, streamType, encodingProperties) {
         // Prevent the device from sleeping while the preview is running
         oDisplayRequest.requestActive();
 
@@ -219,15 +222,21 @@
             cameraPreview.style.transform = "scale(-1, 1)";
         }
 
-        var previewUrl = URL.createObjectURL(oMediaCapture);
-        previewVidTag.src = previewUrl;
-        previewVidTag.play();
+        // Apply desired stream properties
+        return mediaCapture.videoDeviceController.setMediaStreamPropertiesAsync(streamType, encodingProperties)
+            .then(function () {
+                // Recreate pipeline and restart the preview
+                previewVidTag = document.getElementById("cameraPreview");
+                var previewUrl = URL.createObjectURL(mediaCapture);
+                previewVidTag.src = previewUrl;
+                previewVidTag.play();
 
-        previewVidTag.addEventListener("playing", function () {
-            isPreviewing = true;
-            updateCaptureControls();
-            setPreviewRotationAsync();
-        });
+                previewVidTag.addEventListener("playing", function () {
+                    isPreviewing = true;
+                    updateCaptureControls();
+                    setPreviewRotationAsync();
+                });
+            });
     }
 
     /// <summary>
@@ -272,22 +281,22 @@
         // Take the picture
         console.log("Taking photo...");
         return oMediaCapture.capturePhotoToStreamAsync(Windows.Media.MediaProperties.ImageEncodingProperties.createJpeg(), inputStream)
-        .then(function () {
-            return oCaptureFolder.createFileAsync("SimplePhoto.jpg", Windows.Storage.CreationCollisionOption.generateUniqueName);
-        })
-        .then(function (file) {
-            console.log("Photo taken! Saving to " + file.path);
+            .then(function () {
+                return oCaptureFolder.createFileAsync("SimplePhoto.jpg", Windows.Storage.CreationCollisionOption.generateUniqueName);
+            })
+            .then(function (file) {
+                console.log("Photo taken! Saving to " + file.path);
 
-            // Done taking a photo, so re-enable the button
-            videoButton.disabled = false;
+                // Done taking a photo, so re-enable the button
+                videoButton.disabled = false;
 
-            var photoOrientation = CameraRotationHelper.convertSimpleOrientationToPhotoOrientation(oRotationHelper.getCameraCaptureOrientation());
-            return reencodeAndSavePhotoAsync(inputStream, file, photoOrientation);
-        }).then(function () {
-            console.log("Photo saved!");
-        }, function (error) {
-            console.log(error.message);
-        }).done();
+                var photoOrientation = CameraRotationHelper.convertSimpleOrientationToPhotoOrientation(oRotationHelper.getCameraCaptureOrientation());
+                return reencodeAndSavePhotoAsync(inputStream, file, photoOrientation);
+            }).then(function () {
+                console.log("Photo saved!");
+            }, function (error) {
+                console.log(error.message);
+            }).done();
     }
 
     /// <summary>
@@ -296,19 +305,19 @@
     /// <returns></returns>
     function startRecordingAsync() {
         return oCaptureFolder.createFileAsync("SimpleVideo.mp4", Windows.Storage.CreationCollisionOption.generateUniqueName)
-        .then(function (file) {
-            // Calculate rotation angle, taking mirroring into account if necessary
-            var rotationAngle = CameraRotationHelper.convertSimpleOrientationToClockwiseDegrees(oRotationHelper.getCameraCaptureOrientation());
-            var encodingProfile = Windows.Media.MediaProperties.MediaEncodingProfile.createMp4(Windows.Media.MediaProperties.VideoEncodingQuality.auto);
-            encodingProfile.video.properties.insert(RotationKey, rotationAngle);
+            .then(function (file) {
+                // Calculate rotation angle, taking mirroring into account if necessary
+                var rotationAngle = CameraRotationHelper.convertSimpleOrientationToClockwiseDegrees(oRotationHelper.getCameraCaptureOrientation());
+                var encodingProfile = Windows.Media.MediaProperties.MediaEncodingProfile.createMp4(Windows.Media.MediaProperties.VideoEncodingQuality.auto);
+                encodingProfile.video.properties.insert(RotationKey, rotationAngle);
 
-            console.log("Starting recording to " + file.path);
-            return oMediaCapture.startRecordToStorageFileAsync(encodingProfile, file)
-            .then(function () {
-                isRecording = true;
-                console.log("Started recording!");
+                console.log("Starting recording to " + file.path);
+                return oMediaCapture.startRecordToStorageFileAsync(encodingProfile, file)
+                    .then(function () {
+                        isRecording = true;
+                        console.log("Started recording!");
+                    });
             });
-        });
     }
 
     /// <summary>
@@ -318,10 +327,10 @@
     function stopRecordingAsync() {
         console.log("Stopping recording...");
         return oMediaCapture.stopRecordAsync()
-        .then(function () {
-            isRecording = false;
-            console.log("Stopped recording!");
-        });
+            .then(function () {
+                isRecording = false;
+                console.log("Stopped recording!");
+            });
     }
 
     /// <summary>
@@ -333,21 +342,21 @@
         var deviceInfo = null;
         // Get available devices for capturing pictures
         return DeviceInformation.findAllAsync(DeviceClass.videoCapture)
-        .then(function (devices) {
-            devices.forEach(function (cameraDeviceInfo) {
-                if (cameraDeviceInfo.enclosureLocation != null && cameraDeviceInfo.enclosureLocation.panel === panel) {
-                    deviceInfo = cameraDeviceInfo;
-                    return;
+            .then(function (devices) {
+                devices.forEach(function (cameraDeviceInfo) {
+                    if (cameraDeviceInfo.enclosureLocation != null && cameraDeviceInfo.enclosureLocation.panel === panel) {
+                        deviceInfo = cameraDeviceInfo;
+                        return;
+                    }
+                });
+
+                // Nothing matched, just return the first
+                if (!deviceInfo && devices.length > 0) {
+                    deviceInfo = devices.getAt(0);
                 }
+
+                return deviceInfo;
             });
-
-            // Nothing matched, just return the first
-            if (!deviceInfo && devices.length > 0) {
-                deviceInfo = devices.getAt(0);
-            }
-
-            return deviceInfo;
-        });
     }
 
     /// <summary>
@@ -363,23 +372,23 @@
             outputStream = null;
 
         return Imaging.BitmapDecoder.createAsync(inputStream)
-        .then(function (decoder) {
-            bitmapDecoder = decoder;
-            return file.openAsync(Windows.Storage.FileAccessMode.readWrite);
-        }).then(function (outStream) {
-            outputStream = outStream;
-            return Imaging.BitmapEncoder.createForTranscodingAsync(outputStream, bitmapDecoder);
-        }).then(function (encoder) {
-            bitmapEncoder = encoder;
-            var properties = new Imaging.BitmapPropertySet();
-            properties.insert("System.Photo.Orientation", new Imaging.BitmapTypedValue(orientation, Windows.Foundation.PropertyType.uint16));
-            return bitmapEncoder.bitmapProperties.setPropertiesAsync(properties)
-        }).then(function() {
-            return bitmapEncoder.flushAsync();
-        }).then(function () {
-            inputStream.close();
-            outputStream.close();
-        });
+            .then(function (decoder) {
+                bitmapDecoder = decoder;
+                return file.openAsync(Windows.Storage.FileAccessMode.readWrite);
+            }).then(function (outStream) {
+                outputStream = outStream;
+                return Imaging.BitmapEncoder.createForTranscodingAsync(outputStream, bitmapDecoder);
+            }).then(function (encoder) {
+                bitmapEncoder = encoder;
+                var properties = new Imaging.BitmapPropertySet();
+                properties.insert("System.Photo.Orientation", new Imaging.BitmapTypedValue(orientation, Windows.Foundation.PropertyType.uint16));
+                return bitmapEncoder.bitmapProperties.setPropertiesAsync(properties)
+            }).then(function () {
+                return bitmapEncoder.flushAsync();
+            }).then(function () {
+                inputStream.close();
+                outputStream.close();
+            });
     }
 
     /// <summary>
@@ -404,7 +413,7 @@
             photoButton.disabled = isRecording;
         }
     }
-    
+
     /// <summary>
     /// Attempts to lock the page orientation, hide the StatusBar (on Phone) and registers event handlers for hardware buttons and orientation sensors
     /// </summary>
@@ -415,18 +424,18 @@
         registerEventHandlers();
 
         return StorageLibrary.getLibraryAsync(KnownLibraryId.pictures)
-        .then(function (picturesLibrary) {
-            // Fall back to the local app storage if the Pictures Library is not available
-            oCaptureFolder = picturesLibrary.saveFolder || ApplicationData.current.localFolder;
+            .then(function (picturesLibrary) {
+                // Fall back to the local app storage if the Pictures Library is not available
+                oCaptureFolder = picturesLibrary.saveFolder || ApplicationData.current.localFolder;
 
-            // Hide the status bar
-            if (Windows.Foundation.Metadata.ApiInformation.isTypePresent("Windows.UI.ViewManagement.StatusBar")) {
-                return Windows.UI.ViewManagement.StatusBar.getForCurrentView().hideAsync();
-            }
-            else {
-                return WinJS.Promise.as();
-            }
-        });
+                // Hide the status bar
+                if (Windows.Foundation.Metadata.ApiInformation.isTypePresent("Windows.UI.ViewManagement.StatusBar")) {
+                    return Windows.UI.ViewManagement.StatusBar.getForCurrentView().hideAsync();
+                }
+                else {
+                    return WinJS.Promise.as();
+                }
+            });
     }
 
     /// <summary>
@@ -479,7 +488,7 @@
         // if not, then it was already completed.
         if (previousPromise !== _setupPromise) {
             previousPromise = _setupPromise;
-            return _setupPromise.then(function() {
+            return _setupPromise.then(function () {
                 return setUpBasedOnStateAsync(previousPromise);
             });
         }
@@ -496,7 +505,7 @@
             if (wantUIActive) {
                 _setupPromise = WinJS.Promise.join(setupUiAsync(), initializeCameraAsync());
             } else {
-                _setupPromise  = WinJS.Promise.join(cleanupCameraAsync(), cleanupUiAsync());
+                _setupPromise = WinJS.Promise.join(cleanupCameraAsync(), cleanupUiAsync());
             }
         }
 
@@ -515,13 +524,13 @@
         else {
             promiseToExecute = stopRecordingAsync();
         }
-        
+
         promiseToExecute
-        .then(function () {
-            updateCaptureControls();
-        }, function (error) {
-            console.log(error.message);
-        }).done();
+            .then(function () {
+                updateCaptureControls();
+            }, function (error) {
+                console.log(error.message);
+            }).done();
     }
 
     /// <summary>
@@ -549,18 +558,18 @@
     /// </summary>
     function mediaCapture_recordLimitationExceeded() {
         stopRecordingAsync()
-        .done(function () {
-            updateCaptureControls();
-        });
+            .done(function () {
+                updateCaptureControls();
+            });
     }
 
     function mediaCapture_failed(errorEventArgs) {
         console.log("MediaCapture_Failed: 0x" + errorEventArgs.code + ": " + errorEventArgs.message);
 
         cleanupCameraAsync()
-        .done(function() {
-            updateCaptureControls();
-        });    
+            .done(function () {
+                updateCaptureControls();
+            });
     }
 
     app.start();
