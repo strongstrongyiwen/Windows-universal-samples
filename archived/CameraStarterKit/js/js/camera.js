@@ -140,7 +140,7 @@
                         isInitialized = true;
                         // Get all available media stream properties and select the first one as default
                         var allProperties = oMediaCapture.videoDeviceController.getAvailableMediaStreamProperties(Capture.MediaStreamType.videoPreview);
-                        startPreview(oMediaCapture, Capture.MediaStreamType.videoPreview, allProperties[0]);    
+                        startPreview(oMediaCapture, Capture.MediaStreamType.videoPreview, allProperties[0]);  
                     });
             }, function (error) {
                 console.log(error.message);
